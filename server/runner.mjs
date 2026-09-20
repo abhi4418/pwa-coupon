@@ -11,31 +11,44 @@ const sleep = (a = 0.5, b = 1.0) =>
   new Promise((r) => setTimeout(r, (a + Math.random() * (b - a)) * 1000));
 const rnd = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 
-async function launchBrowser() {
+async function launchBrowser(resumeSteelId = "") {
   // Priority: Steel (STEEL_API_KEY) > generic CDP (BROWSER_WS_URL) > local
   // Chrome. Steel runs the browser in its cloud, so Vercel serverless never
   // needs local Chrome. Per Steel docs the WSS shape is
   // wss://connect.steel.dev?apiKey=<key>&sessionId=<id> (sessionId optional).
+  // resumeSteelId lets a fresh instance re-attach to the SAME cloud browser
+  // after Vercel froze the previous instance (see claimLease in store.mjs).
   const { chromium } = await import("playwright-core");
   const steelKey = process.env.STEEL_API_KEY || "";
   if (steelKey) {
-    let steelId = null, viewerUrl = "";
-    try {
-      const r = await fetch("https://api.steel.dev/v1/sessions", {
-        method: "POST",
-        headers: { "steel-api-key": steelKey, "Content-Type": "application/json" },
-        // 30 min timeout: covers a full batch of OTP waits.
-        body: JSON.stringify({ timeout: 1800000 }),
-      });
-      const j = await r.json().catch(() => ({}));
-      steelId = j.id || j.sessionId || null;
-      viewerUrl = j.sessionViewerUrl || j.session_viewer_url || "";
-    } catch { /* fall back: Steel auto-creates a session on connect */ }
+    let steelId = resumeSteelId || null, viewerUrl = "";
+    if (!steelId) {
+      try {
+        const r = await fetch("https://api.steel.dev/v1/sessions", {
+          method: "POST",
+          headers: { "steel-api-key": steelKey, "Content-Type": "application/json" },
+          // 30 min timeout: covers a full batch of OTP waits.
+          body: JSON.stringify({ timeout: 1800000 }),
+        });
+        const j = await r.json().catch(() => ({}));
+        steelId = j.id || j.sessionId || null;
+        viewerUrl = j.sessionViewerUrl || j.session_viewer_url || "";
+      } catch { /* fall back: Steel auto-creates a session on connect */ }
+    }
     const ws = steelId
       ? `wss://connect.steel.dev?apiKey=${encodeURIComponent(steelKey)}&sessionId=${steelId}`
       : `wss://connect.steel.dev?apiKey=${encodeURIComponent(steelKey)}`;
-    const browser = await chromium.connectOverCDP(ws);
-    return { browser, steelId, viewerUrl };
+    try {
+      const browser = await chromium.connectOverCDP(ws);
+      return { browser, steelId, viewerUrl };
+    } catch (e) {
+      if (!resumeSteelId) throw e; // fresh create failed: hard error
+      // Resume target expired — fall through to a brand-new session.
+      steelId = null;
+      const retry = await chromium.connectOverCDP(
+        `wss://connect.steel.dev?apiKey=${encodeURIComponent(steelKey)}`);
+      return { browser: retry, steelId, viewerUrl: "" };
+    }
   }
   if (process.env.BROWSER_WS_URL) {
     const browser = await chromium.connectOverCDP(process.env.BROWSER_WS_URL);
@@ -265,7 +278,17 @@ const liveRuns = new Set();
 
 export async function startRun(sessionId) {
   if (liveRuns.has(sessionId)) return;
+  // Single-flight across instances: whoever holds the lease drives the run.
+  // Called from run-start AND opportunistically from each run-state poll, so
+  // a frozen Vercel instance is picked up by the next poll within ~30s.
+  const { claimLease, refreshLease } = await import("./store.mjs");
+  const lease = await claimLease(sessionId).catch(() => null);
+  if (!lease) return;
   liveRuns.add(sessionId);
+  // Heartbeat keeps the lease while long awaits (page loads, OTP waits) run.
+  const hb = setInterval(() => {
+    refreshLease(sessionId, lease).catch(() => {});
+  }, 10000);
   let browser = null, steelId = null;
   try {
     let s = await getSession(sessionId);
@@ -273,10 +296,12 @@ export async function startRun(sessionId) {
     pushLog(s, `Starting: phone=${s.config.phone} upi=${s.config.upi} state=${s.config.state} (${s.todo.length} coupons)`);
     await saveSession(s);
 
-    const h = await launchBrowser();
+    const h = await launchBrowser(s.steelSessionId || "");
     browser = h.browser;
     steelId = h.steelId;
-    if (h.viewerUrl) pushLog(s, `Steel live view: ${h.viewerUrl}`);
+    if (steelId && steelId !== s.steelSessionId) s.steelSessionId = steelId;
+    if (h.viewerUrl) s.viewerUrl = h.viewerUrl;
+    if (s.viewerUrl) pushLog(s, `Steel live view: ${s.viewerUrl}`);
     await saveSession(s);
 
     // Steel hands us a context with a page already open — reuse it.
@@ -349,6 +374,7 @@ export async function startRun(sessionId) {
     } catch {}
   } finally {
     liveRuns.delete(sessionId);
+    try { clearInterval(hb); } catch {}
     try { await browser?.close(); } catch {}
     try { await releaseSteel(steelId); } catch {}
   }

@@ -6,8 +6,11 @@
 
 ## What v2 does (desktop parity)
 
-1. **Pick image → Extract codes** with the same Gemini model + system prompt as
-   desktop (`GEMINI_MODEL` + `SYSTEM_PROMPT` in `index.html`), via Puter.js.
+1. **Pick image / take photo → Extract codes** with the same Gemini model +
+   system prompt as desktop (`GEMINI_MODEL` + `SYSTEM_PROMPT` in `index.html`),
+   via Puter.js. Gallery input + a 📷 Photo button (`capture="environment"`)
+   that opens the camera directly on mobile. Each step is logged to the
+   activity log, desktop-style.
 2. **Claim settings** (phone, UPI, state, batch size, OTP wait) — same
    validation as desktop (`valid_phone` / `valid_upi` ported to
    `server/botCore.mjs`).
@@ -34,7 +37,8 @@ copies + manual tracking (old v1 behaviour).
 | `server/runner.mjs` | Playwright claim loop (`playwright-core`, system Chrome / `BROWSER_WS_URL`) |
 | `server/localServer.mjs` | Local dev: static + `/api/*` without Vercel |
 | `api/run-start.js` | Vercel: validate + create session + start run |
-| `api/run-state.js` | Vercel: poll session (logs, OTP gate, screenshot) |
+| `api/run-state.js` | Vercel: poll session (logs, OTP gate, screenshot) + **resume** stalled runs |
+| `api/health.js` | Vercel: KV self-test + env check (`needsEnv`, `hasBrowserEnv`) for the status hint |
 | `api/otp.js` | Vercel: resolve OTP gate (continue/skip/quit + code) |
 | `api/run-stop.js` | Vercel: stop run |
 | `vercel.json` | Function `maxDuration` (300s needs Pro) |
@@ -74,11 +78,14 @@ Option A — deploy this folder as the project root:
 
 > **Honest Vercel limit (you chose Vercel-only):** Hobby functions cap at
 > ~10–60s; one OTP wait is 60s × 8 coupons ≈ 8 min. A single function cannot
-> hold the whole batch. `vercel.json` sets `maxDuration: 300` (needs Pro),
-> and the runner is fire-and-forget so polling continues — but on Hobby the
-> run will freeze mid-batch. Reliable options: Vercel Pro **or** host
-> `server/localServer.mjs` on Render/Railway/Fly (long-lived) and set the PWA
-> `fetch("./api/...")` base to that URL.
+> hold the whole batch. `vercel.json` sets `maxDuration: 300` (needs Pro).
+> To survive freezing, every `run-state` poll tries to claim a runner lease
+> (`server/store.mjs`) and resumes the run on a fresh instance, reconnecting
+> to the SAME Steel browser (`steelSessionId`); heartbeats hold the lease
+> while page loads/OTP waits run. Expect up to ~30s stalls on instance hops.
+> If polls report `unknown session`, Upstash env vars are missing — the PWA
+> now fails loudly instead of stalling. `GET /api/health` reports the exact
+> backend state.
 
 ## Keep in sync with desktop
 

@@ -92,8 +92,10 @@
     <p class="hint">Single pick — right here. First run may ask for a free Puter
       sign-in in a popup; remembered afterwards. Same model + prompt as desktop <code>extractor.html</code>.</p>
     <input type="file" id="file" accept="image/*">
+    <input type="file" id="camera" accept="image/*" capture="environment" style="display:none">
     <div class="row">
       <button id="go">Extract codes</button>
+      <button id="photoBtn" class="ghost" style="flex:0 1 auto">📷 Photo</button>
       <button id="signin" class="ghost" style="flex:0 1 auto">Sign in</button>
     </div>
     <div><span id="status">IDLE</span></div>
@@ -114,6 +116,7 @@
       <div><label class="small">OTP wait (sec)</label><input type="tel" id="gateTimeout" value="60"></div>
     </div>
     <p class="hint" id="backendHint">Backend: checking…</p>
+    <p class="hint" id="liveWrap" style="display:none">🔴 <a id="liveLink" href="#" target="_blank" rel="noopener">Watch live browser</a> (Steel session for this run)</p>
   </div>
 
   <div class="card">
@@ -311,23 +314,32 @@ function copyText(t) {
   }
 }
 
-// ---------- extraction via Puter (unchanged) ----------
-fileEl.addEventListener("change", function () {
-  var f = fileEl.files[0];
-  if (f) { previewEl.src = URL.createObjectURL(f); previewEl.style.display = "block"; setStatus("READY"); }
-});
+// ---------- extraction via Puter (gallery + camera share one handler) ----------
+var currentFile = null;
+function setFile(f, src) {
+  if (!f) return;
+  currentFile = f;
+  previewEl.src = URL.createObjectURL(f); previewEl.style.display = "block";
+  setStatus("READY");
+  logLocal("Image selected (" + src + "): " + (f.name || "photo") + " — press Extract codes.");
+}
+fileEl.addEventListener("change", function () { setFile(fileEl.files[0], "gallery"); });
+$("camera").addEventListener("change", function () { setFile($("camera").files[0], "camera"); });
+$("photoBtn").onclick = function () { $("camera").click(); };
 $("go").onclick = async function () {
-  var f = fileEl.files[0];
-  if (!f) { setStatus("Pick an image first"); return; }
+  var f = currentFile || fileEl.files[0];
+  if (!f) { setStatus("Pick an image or take a photo first"); return; }
   if (typeof puter === "undefined") { setStatus("Need internet for puter.js"); return; }
   var btn = $("go"); btn.disabled = true; setStatus("WORKING");
+  logLocal("Sending image to Gemini via Puter…");
   try {
     try {
       if (puter.auth && !(await puter.auth.isSignedIn())) await puter.auth.signIn();
     } catch (e) {
       rawEl.textContent = "Sign-in needed — finish the Puter popup, then press Extract again.";
-      setStatus("AUTH_NEEDED"); return;
+      setStatus("AUTH_NEEDED"); logLocal("Puter sign-in needed (free, one-time) — complete it, then Extract again."); return;
     }
+    logLocal("Gemini is reading the image…");
     var resp = await puter.ai.chat(SYSTEM_PROMPT, f, { model: GEMINI_MODEL });
     var text = resp && resp.message ? resp.message.content : "";
     if (Array.isArray(text)) text = text.filter(function (b) { return b && b.type === "text"; }).map(function (b) { return b.text; }).join("\n");
@@ -335,11 +347,12 @@ $("go").onclick = async function () {
     rawEl.textContent = text;
     var codes = parseCodes(text);
     state.codes = uniq(codes); save(); render();
-    logLocal("Extracted " + codes.length + " code(s) — review, then Start batch.");
+    logLocal("Gemini returned " + codes.length + " code(s) — review / edit box 2, then Start batch.");
     setStatus(codes.length ? "DONE — " + codes.length + " code(s)" : "DONE — nothing parsed");
   } catch (e) {
     var msg = String((e && e.message) || e);
     rawEl.textContent = "Error: " + msg;
+    logLocal("Extraction failed: " + msg.slice(0, 160));
     setStatus(/auth|sign|login|permission|401|403/i.test(msg) ? "AUTH_NEEDED" : "ERROR");
   } finally { btn.disabled = false; }
 };
@@ -350,7 +363,7 @@ $("signin").onclick = async function () {
 };
 
 // ---------- automation backend (new: mirrors desktop run) ----------
-var sessionId = null, pollTimer = null, lastLogCount = 0, otpDeadline = 0, otpTick = null, backendOk = false;
+var sessionId = null, pollTimer = null, lastLogCount = 0, otpDeadline = 0, otpTick = null, backendOk = false, unknownSessionStrikes = 0;
 
 async function api(path, opts) {
   var r = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, opts || {}));
@@ -359,6 +372,17 @@ async function api(path, opts) {
   return j;
 }
 (async function checkBackend() {
+  try {
+    var h = await api("./api/health");
+    backendOk = !!h.ok;
+    if (h.needsEnv) {
+      backendHint.textContent = "Backend: MISCONFIGURED — Vercel needs UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN + (STEEL_API_KEY or BROWSER_WS_URL). Extraction works; Start batch will stall until env vars are set (see pwa/README).";
+      setStatus("Backend misconfigured — see Claim settings");
+    } else {
+      backendHint.textContent = "Backend: connected (" + (h.backend || "memory") + (h.hasBrowserEnv ? ", remote browser set" : ", local Chrome") + ") — Start batch runs the desktop flow (OTP popup appears here).";
+    }
+    return;
+  } catch (e) { /* fall through to legacy ping */ }
   try { await api("./api/run-state?sessionId=__ping__").catch(function (e) {
     if (/unknown session/.test(String(e.message))) { backendOk = true; throw e; } throw e;
   }); backendOk = true; }
@@ -387,7 +411,7 @@ async function startRun(coupons, tag) {
   try {
     setStatus("Starting " + tag + " batch — " + coupons.length + " coupon(s)");
     var r = await api("./api/run-start", { method: "POST", body: JSON.stringify(Object.assign({}, c, { coupons: coupons, tag: tag })) });
-    sessionId = r.sessionId; lastLogCount = 0;
+    sessionId = r.sessionId; lastLogCount = 0; unknownSessionStrikes = 0;
     $("startBtn").disabled = true; $("retryBtn").disabled = true; $("stopBtn").disabled = false;
     pollLoop();
   } catch (e) { setStatus("Start failed: " + e.message); alert("Start failed: " + e.message); }
@@ -398,6 +422,7 @@ async function pollLoop() {
   if (!sessionId) return;
   try {
     var s = await api("./api/run-state?sessionId=" + encodeURIComponent(sessionId));
+    unknownSessionStrikes = 0;
     // new logs -> activity log
     if (s.logs && s.logs.length > lastLogCount) {
       logEl.textContent = (logEl.textContent === "(idle — pick a coupon image to begin)" ? "" : logEl.textContent + "\n") + s.logs.slice(lastLogCount).join("\n");
@@ -405,6 +430,7 @@ async function pollLoop() {
       lastLogCount = s.logs.length;
     }
     refreshStats(s);
+    if (s.viewerUrl) { $("liveLink").href = s.viewerUrl; $("liveWrap").style.display = "block"; }
     if (s.status === "awaiting_otp" && s.current) showOtp(s.current);
     else hideOtp();
     if (s.status === "running") setStatus("Running " + (s.config.tag || "") + " batch — " + s.todo.length + " left");
@@ -413,13 +439,32 @@ async function pollLoop() {
       return; // stop polling
     }
   } catch (e) {
-    logLocal("Poll note: " + e.message);
+    var msg = String((e && e.message) || e);
+    // Session vanishes between serverless invocations when Upstash Redis is
+    // missing — the classic "Start runs but stalls" on Vercel. Fail loudly
+    // instead of polling forever.
+    if (/unknown session/.test(msg)) {
+      unknownSessionStrikes = (typeof unknownSessionStrikes === "number" ? unknownSessionStrikes : 0) + 1;
+      logLocal("Poll note: " + msg + " (" + unknownSessionStrikes + ")");
+      if (unknownSessionStrikes >= 3) {
+        hideOtp();
+        $("startBtn").disabled = false; $("retryBtn").disabled = false; $("stopBtn").disabled = true;
+        setStatus("Backend lost session — set Upstash Redis env vars");
+        backendHint.textContent = "Backend LOST the session between polls (Vercel stateless without Upstash Redis). Set UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN + (STEEL_API_KEY or BROWSER_WS_URL) in Vercel env vars, redeploy, then Start again. Extraction still works.";
+        alert("Backend lost the session (missing Upstash Redis on Vercel). Set UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN and redeploy — see pwa/README.");
+        sessionId = null;
+        return;
+      }
+    } else {
+      logLocal("Poll note: " + msg);
+    }
   }
   pollTimer = setTimeout(pollLoop, 2000);
 }
 
 function onFinished(s) {
   hideOtp();
+  $("liveWrap").style.display = "none";
   $("startBtn").disabled = false; $("retryBtn").disabled = false; $("stopBtn").disabled = true;
   // Desktop box rules: fresh run -> leftovers stay in box 2, bad joins box 3.
   // Review retry -> still-bad + leftovers stay in box 3.

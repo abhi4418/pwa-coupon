@@ -9,7 +9,7 @@ export const LOCATORS = {
   state: "/html/body/div[3]/main/div/div[1]/div/div[4]/form/div[1]/div/div[1]/div/div[3]/select",
   terms: "/html/body/div[3]/main/div/div[1]/div/div[4]/form/div[1]/div/div[1]/div/div[4]/div/input",
   submit: "/html/body/div[3]/main/div/div[1]/div/div[4]/form/div[1]/div/div[1]/div/div[5]/input",
-  otp_next: "/html/body/div[3]/main/div/div[1]/div/div[4]/form/div[3]/div/div[1]/div/div[3]/input",
+  otp_next: "/html/body/div[3]/main/div/div[1]/div/div[4]/form/div[2]/div/div[1]/div/div[2]/input",
   upi_option: "/html/body/div[3]/main/div/div[1]/div/div[4]/form/div[3]/div/div[1]/div/div[1]/div/div/div/div/div/img",
   upi_id: "/html/body/div[3]/main/div/div[1]/div/div[4]/form/div[3]/div/div[1]/div/div[2]/div/div/div[1]/div/input",
   upi_terms: "/html/body/div[3]/main/div/div[1]/div/div[4]/form/div[3]/div/div[1]/div/div[2]/div/div/div[2]/div/div/input",

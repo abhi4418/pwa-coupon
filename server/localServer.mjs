@@ -5,7 +5,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { newSession, getSession, saveSession, pushLog, storeInfo } from "./store.mjs";
+import { newSession, getSession, saveSession, pushLog, storeInfo, kvSelfTest } from "./store.mjs";
 import { validPhone, validUpi } from "./botCore.mjs";
 // runner (playwright) loaded lazily so health/static work without npm install.
 
@@ -38,7 +38,10 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(204, { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET,POST,OPTIONS", "Access-Control-Allow-Headers": "Content-Type" });
       return res.end();
     }
-    if (u.pathname === "/api/health") return send(res, 200, JSON.stringify({ ok: true, ...storeInfo() }));
+    if (u.pathname === "/api/health") {
+      const kv = await kvSelfTest().catch((e) => ({ ok: false, detail: String((e && e.message) || e) }));
+      return send(res, kv.ok ? 200 : 500, JSON.stringify({ ok: kv.ok, ...storeInfo(), kv, hasBrowserEnv: Boolean(process.env.STEEL_API_KEY || process.env.BROWSER_WS_URL), isVercel: false, needsEnv: false }));
+    }
     if (u.pathname === "/api/run-start" && req.method === "POST") {
       const b = await readJson(req);
       const coupons = [...new Set((b.coupons || []).map((c) => String(c).trim().toUpperCase()).filter(Boolean))];

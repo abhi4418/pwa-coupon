@@ -1,5 +1,5 @@
 /* CouponBot PWA shell cache. Bump VERSION to force update. */
-const VERSION = "v2";
+const VERSION = "v3";
 const CACHE = "couponbot-" + VERSION;
 const CORE = ["./", "./index.html", "./manifest.webmanifest"];
 
