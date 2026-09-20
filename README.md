@@ -61,9 +61,14 @@ Option A — deploy this folder as the project root:
    - `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` (**required on
      Vercel** — functions are stateless; without KV the OTP gate + session
      vanish between polls). Create free at upstash.com → Redis → REST.
-   - `BROWSER_WS_URL` (**recommended**) — remote CDP such as Browserbase /
-     Steel / Browserless, e.g. `wss://connect.browserbase.com?...`. Without
-     it Vercel tries to launch Chromium in-function (needs `@sparticuz/chromium`
+   - `BROWSER_WS_URL` (**fallback**) — generic remote CDP such as Browserbase /
+     Browserless, e.g. `wss://connect.browserbase.com?...`. Only used when
+     `STEEL_API_KEY` is unset.
+   - `STEEL_API_KEY` (**recommended**) — Steel cloud browser key from
+     `app.steel.dev` → Settings → API Keys. The backend creates a Steel
+     session (30 min timeout), drives it over CDP, logs a live-viewer URL
+     per run, and releases the session when the batch ends. Without it
+     Vercel tries to launch Chromium in-function (needs `@sparticuz/chromium`
      and still hits timeouts).
 3. `vercel --prod`. Open the URL in Android Chrome → ⋮ → Add to Home screen.
 

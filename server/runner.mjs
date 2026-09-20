@@ -12,17 +12,56 @@ const sleep = (a = 0.5, b = 1.0) =>
 const rnd = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 
 async function launchBrowser() {
-  // Remote CDP (Browserbase/Steel/Browserless) keeps the page alive across
-  // Vercel's stateless invocations. Local dev falls back to system Chrome.
+  // Priority: Steel (STEEL_API_KEY) > generic CDP (BROWSER_WS_URL) > local
+  // Chrome. Steel runs the browser in its cloud, so Vercel serverless never
+  // needs local Chrome. Per Steel docs the WSS shape is
+  // wss://connect.steel.dev?apiKey=<key>&sessionId=<id> (sessionId optional).
   const { chromium } = await import("playwright-core");
-  if (process.env.BROWSER_WS_URL) {
-    return chromium.connectOverCDP(process.env.BROWSER_WS_URL);
+  const steelKey = process.env.STEEL_API_KEY || "";
+  if (steelKey) {
+    let steelId = null, viewerUrl = "";
+    try {
+      const r = await fetch("https://api.steel.dev/v1/sessions", {
+        method: "POST",
+        headers: { "steel-api-key": steelKey, "Content-Type": "application/json" },
+        // 30 min timeout: covers a full batch of OTP waits.
+        body: JSON.stringify({ timeout: 1800000 }),
+      });
+      const j = await r.json().catch(() => ({}));
+      steelId = j.id || j.sessionId || null;
+      viewerUrl = j.sessionViewerUrl || j.session_viewer_url || "";
+    } catch { /* fall back: Steel auto-creates a session on connect */ }
+    const ws = steelId
+      ? `wss://connect.steel.dev?apiKey=${encodeURIComponent(steelKey)}&sessionId=${steelId}`
+      : `wss://connect.steel.dev?apiKey=${encodeURIComponent(steelKey)}`;
+    const browser = await chromium.connectOverCDP(ws);
+    return { browser, steelId, viewerUrl };
   }
-  return chromium.launch({
+  if (process.env.BROWSER_WS_URL) {
+    const browser = await chromium.connectOverCDP(process.env.BROWSER_WS_URL);
+    return { browser, steelId: null, viewerUrl: "" };
+  }
+  const browser = await chromium.launch({
     channel: "chrome",
     headless: true,
     args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
   });
+  return { browser, steelId: null, viewerUrl: "" };
+}
+
+async function releaseSteel(steelId) {
+  // Mirror of SDK client.sessions.release(): best-effort, never throws.
+  if (!steelId || !process.env.STEEL_API_KEY) return;
+  const headers = { "steel-api-key": process.env.STEEL_API_KEY };
+  for (const [method, url] of [
+    ["POST", `https://api.steel.dev/v1/sessions/${steelId}/release`],
+    ["DELETE", `https://api.steel.dev/v1/sessions/${steelId}`],
+  ]) {
+    try {
+      const r = await fetch(url, { method, headers });
+      if (r.ok) return;
+    } catch { /* try next form */ }
+  }
 }
 
 async function humanType(el, text) {
@@ -227,19 +266,33 @@ const liveRuns = new Set();
 export async function startRun(sessionId) {
   if (liveRuns.has(sessionId)) return;
   liveRuns.add(sessionId);
-  let browser = null;
+  let browser = null, steelId = null;
   try {
     let s = await getSession(sessionId);
     if (!s) return;
     pushLog(s, `Starting: phone=${s.config.phone} upi=${s.config.upi} state=${s.config.state} (${s.todo.length} coupons)`);
     await saveSession(s);
 
-    browser = await launchBrowser();
-    const ctx = await browser.newContext({
-      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-      viewport: { width: 1366, height: 900 },
-    });
-    const page = await ctx.newPage();
+    const h = await launchBrowser();
+    browser = h.browser;
+    steelId = h.steelId;
+    if (h.viewerUrl) pushLog(s, `Steel live view: ${h.viewerUrl}`);
+    await saveSession(s);
+
+    // Steel hands us a context with a page already open — reuse it.
+    // Local / generic-CDP browsers get a fresh context instead.
+    let ctx, page;
+    const existing = browser.contexts();
+    if (existing.length) {
+      ctx = existing[0];
+      page = ctx.pages()[0] || (await ctx.newPage());
+    } else {
+      ctx = await browser.newContext({
+        userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        viewport: { width: 1366, height: 900 },
+      });
+      page = await ctx.newPage();
+    }
     await page.goto(CLAIM_URL, { waitUntil: "domcontentloaded", timeout: 45000 }).catch(() => {});
     await page.locator(`xpath=${LOCATORS.phone}`).first().waitFor({ timeout: 40000 }).catch(() => {});
     let batch = 0;
@@ -297,5 +350,6 @@ export async function startRun(sessionId) {
   } finally {
     liveRuns.delete(sessionId);
     try { await browser?.close(); } catch {}
+    try { await releaseSteel(steelId); } catch {}
   }
 }
