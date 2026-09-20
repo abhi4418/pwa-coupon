@@ -99,4 +99,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, "127.0.0.1", () => console.log(`CouponBot PWA+bot on http://127.0.0.1:${PORT}/index.html (${storeInfo().backend})`));
+server.listen(PORT, "127.0.0.1", () => {
+  console.log(`CouponBot PWA+bot on http://127.0.0.1:${PORT}/index.html (${storeInfo().backend})`);
+  console.log(`Free phone access: run "cloudflared tunnel --url http://127.0.0.1:${PORT}" on this PC, paste the https URL into the PWA's Backend URL field.`);
+});

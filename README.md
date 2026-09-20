@@ -56,6 +56,35 @@ Open `http://127.0.0.1:8080/index.html`. Needs system Chrome + internet
 (claim site, js.puter.com). Extraction works without the backend; claiming
 needs the local server running.
 
+## Free option — home PC backend + tunnel ($0, no Steel proxy)
+
+Cloud browsers get `403 Forbidden` from the promo site (datacenter IPs);
+your home IP is residential, so runs work from your own PC for free:
+
+1. On your home PC:
+   ```bat
+   cd desktop-app-v2\pwa
+   npm install
+   npm run bot-server
+   ```
+2. Expose it with free Cloudflare Tunnel (install `cloudflared`, no account
+   needed for quick tunnels):
+   ```bat
+   cloudflared tunnel --url http://127.0.0.1:8080
+   ```
+   Copy the `https://xxx.trycloudflare.com` URL it prints.
+3. On your phone, open the PWA → Claim settings → **Backend URL** → paste
+   that URL. The status hint switches to "home PC — FREE residential runs".
+4. Start batch from the phone. The PC's local Chrome drives the claim site
+   (same IP as the desktop app, so no 403); OTP popups appear on the phone.
+   Keep the PC awake with Chrome installed while a batch runs.
+
+Notes: the tunnel URL is unguessable and acts as the password — restart
+`cloudflared` to rotate it. Same Wi-Fi also works without a tunnel
+(`http://<pc-lan-ip>:8080`), but Android requires HTTPS for installability,
+so the tunnel URL is better. This uses the PWA's `memory` store + local
+Chrome — no Upstash, no Steel, no cost.
+
 ## Deploy on Vercel (frontend + functions)
 
 Option A — deploy this folder as the project root:
