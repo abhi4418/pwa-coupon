@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Coupon Bot — image to codes</title>
-<meta name="description" content="Pick a coupon image, extract codes with Gemini via Puter, track claims. Installable on Android.">
+<title>Coupon Bot — image to claimed</title>
+<meta name="description" content="Pick a coupon image, extract codes with Gemini via Puter, auto-claim like the desktop app. Installable on Android.">
 <meta name="theme-color" content="#4f46e5">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
@@ -20,11 +20,12 @@
            position:sticky; top:0; z-index:5; }
   header h1 { margin:0; font-size:17px; }
   header p { margin:2px 0 0; font-size:12px; color:#c7d2fe; }
-  main { max-width:640px; margin:0 auto; padding:12px 12px 96px; }
+  main { max-width:640px; margin:0 auto; padding:12px 12px 120px; }
   .card { background:var(--card); border:1px solid #e2e8f0; border-radius:12px;
           padding:14px; margin-bottom:12px; }
   .card h2 { margin:0 0 6px; font-size:13px; color:var(--accent);
              text-transform:uppercase; letter-spacing:.04em; }
+  .card h2.warn { color:var(--warn); }
   .hint { color:var(--muted); font-size:12.5px; margin:0 0 10px; line-height:1.45; }
   .row { display:flex; gap:8px; flex-wrap:wrap; }
   button { border:0; border-radius:9px; padding:11px 14px; font-size:14px;
@@ -32,26 +33,33 @@
            flex:1 1 auto; min-height:44px; }
   button.ghost { background:#f1f5f9; color:var(--text); }
   button.ok { background:var(--ok); }
+  button.danger { background:var(--err); }
   button:disabled { opacity:.45; }
   input[type=file] { width:100%; margin:4px 0 8px; font-size:14px; }
+  input[type=text], input[type=tel], select { width:100%; padding:10px; font-size:14px;
+    border:1px solid #e2e8f0; border-radius:8px; margin:2px 0 8px; background:#fff; color:var(--text); }
+  label.small { font-size:12px; color:var(--muted); display:block; margin-top:4px; }
+  .two { display:flex; gap:8px; } .two > div { flex:1; }
   #preview { max-width:100%; border-radius:8px; display:none; margin-top:8px; }
   #status { display:inline-block; margin:10px 0 0; padding:4px 12px;
             border-radius:20px; background:#f1f5f9; font-weight:700; font-size:12.5px; }
   #raw { background:#0b1220; color:#dbe4f3; padding:10px; border-radius:8px;
          white-space:pre-wrap; font-size:12px; min-height:44px; margin:8px 0 0; }
+  #log { background:#0b1220; color:#dbe4f3; padding:10px; border-radius:8px;
+         font-size:12px; height:180px; overflow-y:auto; white-space:pre-wrap; margin:8px 0 0; }
   .stats { display:flex; gap:8px; margin:8px 0; }
   .stat { flex:1; text-align:center; border-radius:9px; padding:8px 4px; font-size:12px; }
   .stat b { display:block; font-size:19px; }
   .s-todo { background:#eef2ff; color:#3730a3; }
   .s-done { background:#dcfce7; color:#166534; }
   .s-fail { background:#fee2e2; color:#991b1b; }
+  .bar { height:10px; background:#e2e8f0; border-radius:6px; overflow:hidden; margin:8px 0; }
+  .bar > div { height:100%; width:0%; background:var(--accent); transition:width .3s; }
   textarea { width:100%; min-height:88px; font-family:Consolas,monospace;
              font-size:14px; border:1px solid #e2e8f0; border-radius:8px; padding:8px; }
   ul#codes { list-style:none; margin:8px 0 0; padding:0; }
   ul#codes li { display:flex; align-items:center; gap:8px; padding:9px 4px;
                 border-top:1px solid #f1f5f9; font-family:Consolas,monospace; }
-  ul#codes li.done span.c { text-decoration:line-through; color:var(--ok); }
-  ul#codes li.fail span.c { text-decoration:line-through; color:var(--err); }
   span.c { flex:1; font-size:15px; font-weight:700; word-break:break-all; }
   .mini { flex:0 0 auto; min-height:38px; padding:7px 10px; font-size:12.5px; }
   .mini.ghost { flex:0 0 auto; }
@@ -59,24 +67,34 @@
            border-top:1px solid #e2e8f0; padding:8px 12px calc(8px + env(safe-area-inset-bottom)); }
   footer .row button { min-height:48px; }
   #installBtn { display:none; }
-  a.claim { display:block; text-align:center; background:var(--ok); color:#fff;
-            border-radius:9px; padding:12px; font-weight:700; text-decoration:none; }
+  /* OTP modal — same role as desktop OtpPopup */
+  #otpWrap { display:none; position:fixed; inset:0; background:rgba(15,23,42,.55);
+             z-index:50; padding:16px; overflow-y:auto; }
+  #otpCard { background:#fff; border-radius:14px; max-width:520px; margin:4vh auto; overflow:hidden; }
+  #otpHead { background:#312e81; color:#fff; padding:12px 14px; display:flex;
+             justify-content:space-between; align-items:center; gap:8px; }
+  #otpHead b.coupon { background:#fff; color:#312e81; padding:4px 10px; border-radius:8px;
+                      font-family:Consolas,monospace; }
+  #otpBody { padding:14px; }
+  #otpShot { width:100%; border-radius:8px; display:none; margin-top:8px; border:1px solid #e2e8f0; }
+  #otpCode { font-size:22px; text-align:center; font-family:Consolas,monospace; letter-spacing:.2em; }
+  #otpCount { color:var(--warn); font-weight:700; font-size:13px; margin-top:6px; text-align:center; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Coupon Bot — image to codes</h1>
-  <p>pick image &rarr; Gemini via Puter &rarr; claim &rarr; track</p>
+  <h1>Coupon Bot — image to claimed</h1>
+  <p>same flow as desktop: image &rarr; Gemini &rarr; claim &rarr; review &rarr; retry</p>
 </header>
 <main>
   <div class="card">
     <h2>1 &middot; Coupon image</h2>
     <p class="hint">Single pick — right here. First run may ask for a free Puter
-      sign-in in a popup; it is remembered afterwards. No API key needed.</p>
+      sign-in in a popup; remembered afterwards. Same model + prompt as desktop <code>extractor.html</code>.</p>
     <input type="file" id="file" accept="image/*">
     <div class="row">
       <button id="go">Extract codes</button>
-      <button id="signin" class="ghost" style="flex:0 1 auto">Sign in to Puter</button>
+      <button id="signin" class="ghost" style="flex:0 1 auto">Sign in</button>
     </div>
     <div><span id="status">IDLE</span></div>
     <img id="preview" alt="coupon preview">
@@ -84,15 +102,33 @@
   </div>
 
   <div class="card">
-    <h2>2 &middot; Codes <span id="count"></span></h2>
+    <h2>Claim settings (same as desktop)</h2>
+    <label class="small">Phone · OTPs arrive here</label>
+    <input type="tel" id="phone" placeholder="10 digits starting 6-9" autocomplete="tel">
+    <label class="small">UPI ID · name@bank</label>
+    <input type="text" id="upi" placeholder="name@bank" autocomplete="off">
+    <label class="small">State</label>
+    <select id="state"></select>
+    <div class="two">
+      <div><label class="small">Batch size</label><input type="tel" id="batch" value="8"></div>
+      <div><label class="small">OTP wait (sec)</label><input type="tel" id="gateTimeout" value="60"></div>
+    </div>
+    <p class="hint" id="backendHint">Backend: checking…</p>
+  </div>
+
+  <div class="card">
+    <h2>2 &middot; Extracted coupons (editable) <span id="count"></span></h2>
     <div class="stats">
       <div class="stat s-todo"><b id="nTodo">0</b>TODO</div>
-      <div class="stat s-done"><b id="nDone">0</b>DONE</div>
+      <div class="stat s-done"><b id="nDone">0</b>DONE (ALL)</div>
       <div class="stat s-fail"><b id="nFail">0</b>FAILED</div>
     </div>
-    <p class="hint">Tap <b>&#10003;</b> when a coupon claims OK, <b>&#10007;</b> for
-      repeated/invalid ones. Saved on this phone automatically. You can also paste/edit below.</p>
-    <textarea id="box" placeholder="One code per line — or extracted codes land here"></textarea>
+    <div class="bar"><div id="barFill"></div></div>
+    <textarea id="box" placeholder="One code per line — extracted codes land here"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button id="startBtn" class="ok">▶ Start batch</button>
+      <button id="stopBtn" class="danger" disabled>■ Stop</button>
+    </div>
     <div class="row" style="margin-top:8px">
       <button id="loadBox" class="ghost">Load edited list</button>
       <button id="copyPending" class="ghost">Copy pending</button>
@@ -101,21 +137,49 @@
   </div>
 
   <div class="card">
-    <h2>3 &middot; Claim</h2>
-    <p class="hint">Claiming still happens on the promo site. Open it, paste one code
-      at a time. Mark &#10003;/&#10007; here as you go — same Notion as desktop box 3.</p>
-    <a class="claim" href="https://pgretailpromo.woohoo.in/claimreward" target="_blank" rel="noopener">Open claim site</a>
+    <h2 class="warn">3 &middot; Needs review (failed / skipped)</h2>
+    <p class="hint">Unsuccessful codes land here after a batch — same as desktop box 3. Edit by hand, then retry just these.</p>
+    <textarea id="reviewBox" placeholder="Failed / skipped codes appear here"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button id="retryBtn">↻ Retry reviewed only</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Activity log</h2>
+    <pre id="log">(idle — pick a coupon image to begin)</pre>
     <div class="row" style="margin-top:8px">
       <button id="installBtn" class="ghost">Install app</button>
       <button id="wipe" class="ghost">Clear all</button>
     </div>
   </div>
 </main>
+
 <footer>
   <div class="row">
     <button id="copyNext" class="ok">Copy next pending</button>
   </div>
 </footer>
+
+<div id="otpWrap">
+  <div id="otpCard">
+    <div id="otpHead"><span>One-time password</span><b class="coupon" id="otpCoupon">—</b></div>
+    <div id="otpBody">
+      <p class="hint">1. Read the SMS OTP on your phone. 2. Type it below and press
+        Submit &amp; Continue — the bot fills it into the claim page. 3. Skip moves on · Quit stops the run.</p>
+      <input type="tel" id="otpCode" placeholder="••••••" autocomplete="one-time-code">
+      <div id="otpCount">--:--</div>
+      <img id="otpShot" alt="claim page at OTP step">
+      <div class="row" style="margin-top:10px">
+        <button id="otpSubmit" class="ok">Submit &amp; Continue</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="otpSkip" class="ghost">Skip</button>
+        <button id="otpQuit" class="danger">Quit run</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script>
 "use strict";
@@ -133,112 +197,129 @@ var SYSTEM_PROMPT = [
   "- No explanations, no markdown, no extra text."
 ].join("\n");
 
-var CLAIM_URL = "https://pgretailpromo.woohoo.in/claimreward";
-var LS_KEY = "couponPwaV1";
-var state = { codes: [] }; // [{code, st: 'todo'|'done'|'fail'}]
+var STATES = ["ANDAMAN AND NICOBAR ISLANDS","ANDHRA PRADESH","ARUNACHAL PRADESH","ASSAM","BIHAR","CHANDIGARH","CHHATTISGARH","DADRA AND NAGAR HAVELI AND DAMAN AND DIU","DELHI","GOA","GUJARAT","HARYANA","HIMACHAL PRADESH","JAMMU AND KASHMIR","JHARKHAND","KARNATAKA","KERALA","LADAKH","LAKSHADWEEP","MADHYA PRADESH","MAHARASHTRA","MANIPUR","MEGHALAYA","MIZORAM","NAGALAND","ODISHA","PUDUCHERRY","PUNJAB","RAJASTHAN","SIKKIM","TAMIL NADU","TELANGANA","TRIPURA","UTTAR PRADESH","UTTARAKHAND","WEST BENGAL"];
+var LS_KEY = "couponPwaV2"; // v2: settings + extracted + review + cumulative done
+var state = { codes: [], review: [], doneAll: 0, phone: "", upi: "", st: "DELHI", batch: "8", gateTimeout: "60" };
 
 var $ = function (id) { return document.getElementById(id); };
 var statusEl = $("status"), rawEl = $("raw"), fileEl = $("file"),
-    previewEl = $("preview"), boxEl = $("box"), listEl = $("codes");
+    previewEl = $("preview"), boxEl = $("box"), reviewEl = $("reviewBox"),
+    listEl = $("codes"), logEl = $("log"), backendHint = $("backendHint");
+
+// ---------- settings ----------
+STATES.forEach(function (s) {
+  var o = document.createElement("option"); o.value = s; o.textContent = s;
+  $("state").appendChild(o);
+});
+function syncSettingsToUI() {
+  $("phone").value = state.phone || ""; $("upi").value = state.upi || "";
+  $("state").value = state.st || "DELHI"; $("batch").value = state.batch || "8";
+  $("gateTimeout").value = state.gateTimeout || "60";
+}
+["phone","upi","state","batch","gateTimeout"].forEach(function (id) {
+  $(id).addEventListener("change", function () {
+    state.phone = $("phone").value; state.upi = $("upi").value;
+    state.st = $("state").value; state.batch = $("batch").value;
+    state.gateTimeout = $("gateTimeout").value; save();
+  });
+});
 
 function setStatus(s) { statusEl.textContent = s; }
-function toast(m) { setStatus(m); }
+function logLocal(m) {
+  var t = new Date().toTimeString().slice(0, 8);
+  logEl.textContent = (logEl.textContent === "(idle — pick a coupon image to begin)" ? "" : logEl.textContent + "\n") + "[" + t + "] " + m;
+  logEl.scrollTop = logEl.scrollHeight;
+}
 
 // ---------- persistence ----------
 function save() {
+  state.phone = $("phone").value; state.upi = $("upi").value;
+  state.st = $("state").value; state.batch = $("batch").value;
+  state.gateTimeout = $("gateTimeout").value;
   try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {}
 }
 function load() {
   try {
     var d = JSON.parse(localStorage.getItem(LS_KEY) || "null");
-    if (d && Array.isArray(d.codes)) state = d;
+    if (d) {
+      // migrate v1 shape {codes:[{code,st}]}
+      if (Array.isArray(d.codes) && d.codes.length && typeof d.codes[0] === "object") {
+        state.codes = d.codes.map(function (c) { return c.code; });
+        state.doneAll = d.codes.filter(function (c) { return c.st === "done"; }).length;
+      } else Object.assign(state, d);
+    }
   } catch (e) {}
+  // migrate plain string arrays safely
+  state.codes = (state.codes || []).map(String);
+  state.review = (state.review || []).map(String);
 }
 
-// ---------- parsing (mirrors extract_coupons.parse_codes) ----------
+// ---------- parsing (mirrors desktop parse_codes) ----------
 function parseCodes(text) {
   text = text || "";
   var m = text.match(/\[[\s\S]*?\]/);
   if (m) {
     try {
       var arr = JSON.parse(m[0]);
-      var out = arr.map(function (x) {
-        return String(x).replace(/[\s\-]/g, "").toUpperCase();
-      }).filter(Boolean);
+      var out = arr.map(function (x) { return String(x).replace(/[\s\-]/g, "").toUpperCase(); }).filter(Boolean);
       if (out.length) return Array.from(new Set(out));
     } catch (e) {}
   }
-  var toks = (text.toUpperCase().match(/[A-Z0-9]{8,}/g) || []);
-  return Array.from(new Set(toks));
+  return Array.from(new Set(text.toUpperCase().match(/[A-Z0-9]{8,}/g) || []));
 }
 
 // ---------- list UI ----------
-function setCodes(codes, keepStatus) {
-  var prev = {};
-  if (keepStatus) state.codes.forEach(function (c) { prev[c.code] = c.st; });
-  var seen = {};
-  state.codes = codes.filter(Boolean).map(function (c) {
-    c = String(c).trim().toUpperCase();
-    return c;
-  }).filter(function (c) {
-    if (!c || seen[c]) return false;
-    seen[c] = 1; return true;
-  }).map(function (c) {
-    return { code: c, st: prev[c] || "todo" };
-  });
-  save(); render();
-}
+function uniq(arr) { return Array.from(new Set(arr.map(function (c) { return String(c).trim().toUpperCase(); }).filter(Boolean))); }
 function render() {
-  var nT = 0, nD = 0, nF = 0;
-  listEl.innerHTML = "";
-  state.codes.forEach(function (c, i) {
-    if (c.st === "done") nD++; else if (c.st === "fail") nF++; else nT++;
-    var li = document.createElement("li");
-    li.className = c.st;
-    var sp = document.createElement("span");
-    sp.className = "c"; sp.textContent = c.code;
-    var bCopy = document.createElement("button");
-    bCopy.className = "mini ghost"; bCopy.textContent = "Copy";
-    bCopy.onclick = function () { copyText(c.code); };
-    var bOk = document.createElement("button");
-    bOk.className = "mini ok"; bOk.textContent = "\u2713";
-    bOk.title = "mark done";
-    bOk.onclick = function () { state.codes[i].st = c.st === "done" ? "todo" : "done"; save(); render(); };
-    var bFail = document.createElement("button");
-    bFail.className = "mini ghost"; bFail.textContent = "\u2717";
-    bFail.title = "mark failed (repeated/invalid)";
-    bFail.onclick = function () { state.codes[i].st = c.st === "fail" ? "todo" : "fail"; save(); render(); };
-    li.appendChild(sp); li.appendChild(bCopy); li.appendChild(bOk); li.appendChild(bFail);
-    listEl.appendChild(li);
-  });
-  $("nTodo").textContent = nT; $("nDone").textContent = nD; $("nFail").textContent = nF;
+  boxEl.value = state.codes.join("\n");
+  reviewEl.value = state.review.join("\n");
   $("count").textContent = state.codes.length ? "(" + state.codes.length + ")" : "";
-  boxEl.value = state.codes.map(function (c) { return c.code; }).join("\n");
+  listEl.innerHTML = "";
+  state.codes.forEach(function (code) {
+    var li = document.createElement("li");
+    var sp = document.createElement("span"); sp.className = "c"; sp.textContent = code;
+    var bCopy = document.createElement("button"); bCopy.className = "mini ghost"; bCopy.textContent = "Copy";
+    bCopy.onclick = function () { copyText(code); };
+    li.appendChild(sp); li.appendChild(bCopy); listEl.appendChild(li);
+  });
+  refreshStats(null);
 }
-function pending() { return state.codes.filter(function (c) { return c.st === "todo"; }); }
+function refreshStats(sess) {
+  var done = state.doneAll + (sess ? sess.done.length : 0);
+  var skip = sess ? sess.skipped.length : 0;
+  var fail = sess ? sess.failed.length : 0;
+  if (sess && sess.status === "finished") { /* totals already merged on finish */ }
+  $("nTodo").textContent = sess ? sess.todo.length : state.codes.length;
+  $("nDone").textContent = done;
+  $("nFail").textContent = sess ? (skip + fail) : 0;
+  var total = sess ? (sess.todo.length + sess.done.length + sess.skipped.length + sess.failed.length) : 0;
+  var finished = sess ? (sess.done.length + sess.skipped.length + sess.failed.length) : 0;
+  $("barFill").style.width = total ? (100 * finished / total) + "%" : "0%";
+}
+function pending() { return state.codes.slice(); }
 
 function copyText(t) {
-  function done() { toast("Copied " + t.slice(0, 18)); }
+  function done() { setStatus("Copied " + String(t).slice(0, 18)); }
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(t).then(done, function () { fallback(); });
   } else fallback();
   function fallback() {
     var ta = document.createElement("textarea");
     ta.value = t; document.body.appendChild(ta); ta.select();
-    try { document.execCommand("copy"); done(); } catch (e) { toast("Copy failed — long-press to copy"); }
+    try { document.execCommand("copy"); done(); } catch (e) { setStatus("Copy failed — long-press to copy"); }
     document.body.removeChild(ta);
   }
 }
 
-// ---------- extraction via Puter ----------
+// ---------- extraction via Puter (unchanged) ----------
 fileEl.addEventListener("change", function () {
   var f = fileEl.files[0];
   if (f) { previewEl.src = URL.createObjectURL(f); previewEl.style.display = "block"; setStatus("READY"); }
 });
 $("go").onclick = async function () {
   var f = fileEl.files[0];
-  if (!f) { toast("Pick an image first"); return; }
-  if (typeof puter === "undefined") { toast("Need internet for puter.js"); return; }
+  if (!f) { setStatus("Pick an image first"); return; }
+  if (typeof puter === "undefined") { setStatus("Need internet for puter.js"); return; }
   var btn = $("go"); btn.disabled = true; setStatus("WORKING");
   try {
     try {
@@ -253,7 +334,8 @@ $("go").onclick = async function () {
     text = String(text == null ? "" : text);
     rawEl.textContent = text;
     var codes = parseCodes(text);
-    setCodes(codes, true);
+    state.codes = uniq(codes); save(); render();
+    logLocal("Extracted " + codes.length + " code(s) — review, then Start batch.");
     setStatus(codes.length ? "DONE — " + codes.length + " code(s)" : "DONE — nothing parsed");
   } catch (e) {
     var msg = String((e && e.message) || e);
@@ -262,32 +344,155 @@ $("go").onclick = async function () {
   } finally { btn.disabled = false; }
 };
 $("signin").onclick = async function () {
-  if (typeof puter === "undefined") { toast("Need internet for puter.js"); return; }
-  try {
-    await puter.auth.signIn();
-    toast(await puter.auth.isSignedIn() ? "Signed in" : "AUTH_NEEDED");
-  } catch (e) { toast("Finish sign-in in the Puter dialog"); }
+  if (typeof puter === "undefined") { setStatus("Need internet for puter.js"); return; }
+  try { await puter.auth.signIn(); setStatus(await puter.auth.isSignedIn() ? "Signed in" : "AUTH_NEEDED"); }
+  catch (e) { setStatus("Finish sign-in in the Puter dialog"); }
 };
 
-// ---------- list actions ----------
+// ---------- automation backend (new: mirrors desktop run) ----------
+var sessionId = null, pollTimer = null, lastLogCount = 0, otpDeadline = 0, otpTick = null, backendOk = false;
+
+async function api(path, opts) {
+  var r = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, opts || {}));
+  var j = await r.json().catch(function () { return { error: "bad response " + r.status }; });
+  if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
+(async function checkBackend() {
+  try { await api("./api/run-state?sessionId=__ping__").catch(function (e) {
+    if (/unknown session/.test(String(e.message))) { backendOk = true; throw e; } throw e;
+  }); backendOk = true; }
+  catch (e) { backendOk = /unknown session/.test(String((e && e.message) || "")); }
+  backendHint.textContent = backendOk
+    ? "Backend: connected — Start batch runs the desktop flow (OTP popup appears here)."
+    : "Backend: not reachable — PWA falls back to manual track mode (copy + ✓/✗). Run `npm run bot-server` locally or deploy with backend.";
+})();
+
+function readSettings() {
+  save();
+  return { phone: state.phone.trim(), upi: state.upi.trim(), state: state.st,
+           batchSize: Math.max(1, parseInt(state.batch, 10) || 8),
+           gateTimeout: Math.max(30, parseInt(state.gateTimeout, 10) || 60) };
+}
+function validPhone(s) { return /^[6-9]\d{9}$/.test(s); }
+function validUpi(s) { return /^[\w.\-]{2,}@[a-zA-Z]{2,}$/.test(s); }
+
+async function startRun(coupons, tag) {
+  coupons = uniq(coupons);
+  if (!coupons.length) { alert(tag === "review" ? "Review list empty — edit box 3 first." : "Extract from an image (or type codes into box 2) first."); return; }
+  var c = readSettings();
+  if (!validPhone(c.phone)) { alert("Invalid phone: 10 digits starting 6-9."); return; }
+  if (!validUpi(c.upi)) { alert("Invalid UPI ID: name@bank."); return; }
+  if (!backendOk) { alert("Backend not reachable. Deploy the backend (Vercel) or run `npm run bot-server` — meanwhile use Copy next + claim manually."); return; }
+  try {
+    setStatus("Starting " + tag + " batch — " + coupons.length + " coupon(s)");
+    var r = await api("./api/run-start", { method: "POST", body: JSON.stringify(Object.assign({}, c, { coupons: coupons, tag: tag })) });
+    sessionId = r.sessionId; lastLogCount = 0;
+    $("startBtn").disabled = true; $("retryBtn").disabled = true; $("stopBtn").disabled = false;
+    pollLoop();
+  } catch (e) { setStatus("Start failed: " + e.message); alert("Start failed: " + e.message); }
+}
+
+async function pollLoop() {
+  clearTimeout(pollTimer);
+  if (!sessionId) return;
+  try {
+    var s = await api("./api/run-state?sessionId=" + encodeURIComponent(sessionId));
+    // new logs -> activity log
+    if (s.logs && s.logs.length > lastLogCount) {
+      logEl.textContent = (logEl.textContent === "(idle — pick a coupon image to begin)" ? "" : logEl.textContent + "\n") + s.logs.slice(lastLogCount).join("\n");
+      logEl.scrollTop = logEl.scrollHeight;
+      lastLogCount = s.logs.length;
+    }
+    refreshStats(s);
+    if (s.status === "awaiting_otp" && s.current) showOtp(s.current);
+    else hideOtp();
+    if (s.status === "running") setStatus("Running " + (s.config.tag || "") + " batch — " + s.todo.length + " left");
+    if (s.status === "finished" || s.status === "stopped" || s.status === "error") {
+      onFinished(s);
+      return; // stop polling
+    }
+  } catch (e) {
+    logLocal("Poll note: " + e.message);
+  }
+  pollTimer = setTimeout(pollLoop, 2000);
+}
+
+function onFinished(s) {
+  hideOtp();
+  $("startBtn").disabled = false; $("retryBtn").disabled = false; $("stopBtn").disabled = true;
+  // Desktop box rules: fresh run -> leftovers stay in box 2, bad joins box 3.
+  // Review retry -> still-bad + leftovers stay in box 3.
+  var bad = (s.failed || []).concat(s.skipped || []);
+  if ((s.config.tag || "fresh") === "fresh") {
+    state.codes = uniq(s.todo || []);
+    if (bad.length) state.review = uniq(state.review.concat(bad));
+  } else {
+    state.review = uniq(bad.concat((s.todo || []).filter(function (c) { return bad.indexOf(c) < 0; })));
+  }
+  state.doneAll += (s.done || []).length;
+  save(); render(); refreshStats(s);
+  setStatus("Batch done — total claimed: " + state.doneAll);
+  sessionId = null;
+  alert("Batch finished (" + s.config.tag + "): done " + s.done.length + ", unsuccessful " + bad.length + "\nTotal claimed: " + state.doneAll + "\nNeeds review: " + state.review.length);
+}
+
+// ---------- OTP popup (same role as desktop OtpPopup) ----------
+function showOtp(g) {
+  $("otpWrap").style.display = "block";
+  if ($("otpCoupon").textContent !== g.coupon) {
+    $("otpCoupon").textContent = g.coupon;
+    $("otpCode").value = "";
+    otpDeadline = g.deadline || (Date.now() + 60000);
+    if (g.screenshot) { $("otpShot").src = g.screenshot; $("otpShot").style.display = "block"; }
+    else $("otpShot").style.display = "none";
+  }
+  clearInterval(otpTick);
+  otpTick = setInterval(function () {
+    var left = Math.max(0, Math.floor((otpDeadline - Date.now()) / 1000));
+    var m = String(Math.floor(left / 60)).padStart(2, "0"), sec = String(left % 60).padStart(2, "0");
+    $("otpCount").textContent = "Auto-skip in " + m + ":" + sec;
+    if (left <= 0) { clearInterval(otpTick); otpAct("skip"); }
+  }, 500);
+}
+function hideOtp() { $("otpWrap").style.display = "none"; clearInterval(otpTick); }
+async function otpAct(action) {
+  if (!sessionId) { hideOtp(); return; }
+  try {
+    await api("./api/otp", { method: "POST", body: JSON.stringify({ sessionId: sessionId, action: action, code: $("otpCode").value }) });
+    hideOtp(); setStatus(action === "continue" ? "OTP submitted — continuing…" : action + " sent…");
+  } catch (e) { setStatus("OTP post failed: " + e.message); }
+}
+$("otpSubmit").onclick = function () { otpAct("continue"); };
+$("otpSkip").onclick = function () { otpAct("skip"); };
+$("otpQuit").onclick = function () { otpAct("quit"); };
+
+$("startBtn").onclick = function () { startRun(boxEl.value.split(/\r?\n/), "fresh"); };
+$("retryBtn").onclick = function () { startRun(reviewEl.value.split(/\r?\n/), "review"); };
+$("stopBtn").onclick = async function () {
+  if (!sessionId) return;
+  $("stopBtn").disabled = true;
+  try { await api("./api/run-stop", { method: "POST", body: JSON.stringify({ sessionId: sessionId }) }); }
+  catch (e) { setStatus("Stop failed: " + e.message); }
+};
+
+// ---------- list actions (kept) ----------
 $("loadBox").onclick = function () {
-  var lines = boxEl.value.split(/\r?\n/).map(function (s) { return s.trim().toUpperCase(); }).filter(Boolean);
-  setCodes(lines, true);
-  toast(lines.length + " loaded");
+  state.codes = uniq(boxEl.value.split(/\r?\n/)); save(); render();
+  setStatus(state.codes.length + " loaded");
 };
 $("copyPending").onclick = function () {
-  var p = pending().map(function (c) { return c.code; });
-  if (!p.length) { toast("Nothing pending"); return; }
+  var p = state.codes; if (!p.length) { setStatus("Nothing pending"); return; }
   copyText(p.join("\n"));
 };
 $("copyNext").onclick = function () {
-  var p = pending();
-  if (!p.length) { toast("Nothing pending"); return; }
-  copyText(p[0].code);
+  if (!state.codes.length) { setStatus("Nothing pending"); return; }
+  copyText(state.codes[0]);
 };
 $("wipe").onclick = function () {
   if (!state.codes.length || confirm("Clear all codes on this phone?")) {
-    state = { codes: [] }; save(); render(); rawEl.textContent = "(result appears here)"; toast("IDLE");
+    state = { codes: [], review: [], doneAll: 0, phone: $("phone").value, upi: $("upi").value, st: $("state").value, batch: $("batch").value, gateTimeout: $("gateTimeout").value };
+    save(); render(); rawEl.textContent = "(result appears here)"; setStatus("IDLE");
   }
 };
 
@@ -298,7 +503,7 @@ window.addEventListener("beforeinstallprompt", function (e) {
   $("installBtn").style.display = "block";
 });
 $("installBtn").onclick = async function () {
-  if (!deferredPrompt) { toast("Use browser menu → Add to Home screen"); return; }
+  if (!deferredPrompt) { setStatus("Use browser menu → Add to Home screen"); return; }
   deferredPrompt.prompt();
   try { await deferredPrompt.userChoice; } catch (e) {}
   deferredPrompt = null; $("installBtn").style.display = "none";
@@ -309,7 +514,7 @@ if ("serviceWorker" in navigator) {
   });
 }
 
-load(); render();
+load(); syncSettingsToUI(); render();
 </script>
 </body>
 </html>

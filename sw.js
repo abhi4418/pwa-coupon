@@ -1,5 +1,5 @@
 /* CouponBot PWA shell cache. Bump VERSION to force update. */
-const VERSION = "v1";
+const VERSION = "v2";
 const CACHE = "couponbot-" + VERSION;
 const CORE = ["./", "./index.html", "./manifest.webmanifest"];
 
@@ -21,8 +21,9 @@ self.addEventListener("fetch", (e) => {
   const req = e.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  // Only cache same-origin shell; Puter/CDN/claim site stay network-only.
+  // Only cache same-origin shell; Puter/CDN/claim site/backend stay network-only.
   if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith("/api/") || url.pathname.includes("/api/")) return;
   e.respondWith(
     caches.match(req, { ignoreSearch: false }).then(
       (hit) =>

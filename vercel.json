@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/run-start.js": { "maxDuration": 300 },
+    "api/run-state.js": { "maxDuration": 10 },
+    "api/otp.js": { "maxDuration": 10 },
+    "api/run-stop.js": { "maxDuration": 10 }
+  }
+}

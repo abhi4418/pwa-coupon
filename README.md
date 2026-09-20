@@ -1,42 +1,81 @@
-# CouponBot PWA (Step 1 — installable mobile page)
+# CouponBot PWA v2 — full desktop flow on the web (desktop app untouched)
 
-No APK build. This is the "same thing for Android" with the least effort:
-an installable web page that does image → codes + tracking on the phone.
-Claiming still happens on the promo site (button inside the page).
+`../app.py`, `../bot_core.py`, `../extract_coupons.py`, `../extractor.html` are
+**not modified** — everything new lives in this `pwa/` folder, deployable to
+**Vercel** as-is.
 
-## What it does
+## What v2 does (desktop parity)
 
-- Pick a coupon image (camera or gallery) — one prompt, on the phone.
-- Extract codes with the same Gemini model + system prompt as desktop
-  (`extractor.html`), via Puter.js — no API key, one-time free sign-in.
-- Editable code list with TODO / DONE / FAILED, saved in `localStorage`.
-- Copy next / copy pending, per-code copy.
-- "Open claim site" deep-link; mark ✓/✗ as you claim (mirrors desktop box 3).
-- Installable: Add to Home screen → standalone icon.
+1. **Pick image → Extract codes** with the same Gemini model + system prompt as
+   desktop (`GEMINI_MODEL` + `SYSTEM_PROMPT` in `index.html`), via Puter.js.
+2. **Claim settings** (phone, UPI, state, batch size, OTP wait) — same
+   validation as desktop (`valid_phone` / `valid_upi` ported to
+   `server/botCore.mjs`).
+3. **Start batch** runs the desktop claim loop on the backend
+   (`server/runner.mjs` — port of `bot_core.py`: same XPaths, rejection sniff,
+   OTP screenshot, UPI steps, batch limit, stop).
+4. **OTP popup** (same role as desktop `OtpPopup`): backend pauses per coupon,
+   PWA polls `GET /api/run-state`, shows modal with countdown + page
+   screenshot; Submit / Skip / Quit posts to `POST /api/otp`.
+5. **Needs review**: failed + skipped land in box 3; edit by hand, then
+   **Retry reviewed only** (same box rules as desktop `_on_finished`).
+6. **Activity log + progress + DONE (ALL) / SKIPPED / FAILED** mirror desktop.
+
+No-backend fallback: if `/api/*` is unreachable the page still extracts +
+copies + manual tracking (old v1 behaviour).
+
+## Layout (all inside `pwa/`)
+
+| Path | Purpose |
+|---|---|
+| `index.html` | Full PWA UI (Vercel static) |
+| `server/botCore.mjs` | Port of `bot_core.py` constants/validators (no desktop import) |
+| `server/store.mjs` | Session store: memory locally, Upstash Redis on Vercel |
+| `server/runner.mjs` | Playwright claim loop (`playwright-core`, system Chrome / `BROWSER_WS_URL`) |
+| `server/localServer.mjs` | Local dev: static + `/api/*` without Vercel |
+| `api/run-start.js` | Vercel: validate + create session + start run |
+| `api/run-state.js` | Vercel: poll session (logs, OTP gate, screenshot) |
+| `api/otp.js` | Vercel: resolve OTP gate (continue/skip/quit + code) |
+| `api/run-stop.js` | Vercel: stop run |
+| `vercel.json` | Function `maxDuration` (300s needs Pro) |
+| `package.json` | Only dep: `playwright-core` |
 
 ## Test locally
 
 ```bat
 cd desktop-app-v2\pwa
-python -m http.server 8080
+npm install
+npm run bot-server
 ```
 
-Open `http://127.0.0.1:8080/index.html` on desktop, or the PC's LAN IP
-(e.g. `http://192.168.1.5:8080/index.html`) from Android Chrome on the
-same Wi-Fi. Puter.js needs internet.
+Open `http://127.0.0.1:8080/index.html`. Needs system Chrome + internet
+(claim site, js.puter.com). Extraction works without the backend; claiming
+needs the local server running.
 
-## Put it on the phone (no Play Store)
+## Deploy on Vercel (frontend + functions)
 
-Option A — free static host (installable, HTTPS):
-1. Upload the `pwa/` folder contents to GitHub Pages / Netlify / Cloudflare Pages.
-2. Open the HTTPS URL in Android Chrome → ⋮ → Add to Home screen (or Install app).
+Option A — deploy this folder as the project root:
 
-Option B — same Wi-Fi only (testing): use the LAN URL above → ⋮ → Add to Home screen.
-Service worker + install prompt need `localhost` or HTTPS; plain `http://192.168…`
-still works as a page, install prompt may not show — use Option A for the real icon.
+1. `vercel` → set root to `desktop-app-v2/pwa` (or copy its contents to a repo root).
+2. Env vars (Vercel dashboard → Settings → Environment Variables):
+   - `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` (**required on
+     Vercel** — functions are stateless; without KV the OTP gate + session
+     vanish between polls). Create free at upstash.com → Redis → REST.
+   - `BROWSER_WS_URL` (**recommended**) — remote CDP such as Browserbase /
+     Steel / Browserless, e.g. `wss://connect.browserbase.com?...`. Without
+     it Vercel tries to launch Chromium in-function (needs `@sparticuz/chromium`
+     and still hits timeouts).
+3. `vercel --prod`. Open the URL in Android Chrome → ⋮ → Add to Home screen.
 
-## Notes
+> **Honest Vercel limit (you chose Vercel-only):** Hobby functions cap at
+> ~10–60s; one OTP wait is 60s × 8 coupons ≈ 8 min. A single function cannot
+> hold the whole batch. `vercel.json` sets `maxDuration: 300` (needs Pro),
+> and the runner is fire-and-forget so polling continues — but on Hobby the
+> run will freeze mid-batch. Reliable options: Vercel Pro **or** host
+> `server/localServer.mjs` on Render/Railway/Fly (long-lived) and set the PWA
+> `fetch("./api/...")` base to that URL.
 
-- Keep `GEMINI_MODEL` / `SYSTEM_PROMPT` in sync with `../extractor.html`.
-- Claiming automation (OTP popup flow from `bot_core.py`) is desktop-only.
-  This page intentionally only tracks; the phone browser does the claim taps.
+## Keep in sync with desktop
+
+- `GEMINI_MODEL` / `SYSTEM_PROMPT` ↔ `../extractor.html`
+- `LOCATORS` / `ERROR_RE` / flow ↔ `../bot_core.py` (manual copy — desktop stays frozen)
