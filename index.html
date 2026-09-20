@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Coupon Bot — image to codes</title>
+<meta name="description" content="Pick a coupon image, extract codes with Gemini via Puter, track claims. Installable on Android.">
+<meta name="theme-color" content="#4f46e5">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<script src="https://js.puter.com/v2/"></script>
+<style>
+  :root { --accent:#4f46e5; --bg:#eef2f7; --card:#fff; --text:#0f172a;
+          --muted:#64748b; --ok:#16a34a; --warn:#d97706; --err:#dc2626; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI",system-ui,Roboto,Arial,sans-serif;
+         background:var(--bg); color:var(--text); }
+  header { background:var(--accent); color:#fff; padding:14px 16px;
+           position:sticky; top:0; z-index:5; }
+  header h1 { margin:0; font-size:17px; }
+  header p { margin:2px 0 0; font-size:12px; color:#c7d2fe; }
+  main { max-width:640px; margin:0 auto; padding:12px 12px 96px; }
+  .card { background:var(--card); border:1px solid #e2e8f0; border-radius:12px;
+          padding:14px; margin-bottom:12px; }
+  .card h2 { margin:0 0 6px; font-size:13px; color:var(--accent);
+             text-transform:uppercase; letter-spacing:.04em; }
+  .hint { color:var(--muted); font-size:12.5px; margin:0 0 10px; line-height:1.45; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; }
+  button { border:0; border-radius:9px; padding:11px 14px; font-size:14px;
+           font-weight:700; cursor:pointer; background:var(--accent); color:#fff;
+           flex:1 1 auto; min-height:44px; }
+  button.ghost { background:#f1f5f9; color:var(--text); }
+  button.ok { background:var(--ok); }
+  button:disabled { opacity:.45; }
+  input[type=file] { width:100%; margin:4px 0 8px; font-size:14px; }
+  #preview { max-width:100%; border-radius:8px; display:none; margin-top:8px; }
+  #status { display:inline-block; margin:10px 0 0; padding:4px 12px;
+            border-radius:20px; background:#f1f5f9; font-weight:700; font-size:12.5px; }
+  #raw { background:#0b1220; color:#dbe4f3; padding:10px; border-radius:8px;
+         white-space:pre-wrap; font-size:12px; min-height:44px; margin:8px 0 0; }
+  .stats { display:flex; gap:8px; margin:8px 0; }
+  .stat { flex:1; text-align:center; border-radius:9px; padding:8px 4px; font-size:12px; }
+  .stat b { display:block; font-size:19px; }
+  .s-todo { background:#eef2ff; color:#3730a3; }
+  .s-done { background:#dcfce7; color:#166534; }
+  .s-fail { background:#fee2e2; color:#991b1b; }
+  textarea { width:100%; min-height:88px; font-family:Consolas,monospace;
+             font-size:14px; border:1px solid #e2e8f0; border-radius:8px; padding:8px; }
+  ul#codes { list-style:none; margin:8px 0 0; padding:0; }
+  ul#codes li { display:flex; align-items:center; gap:8px; padding:9px 4px;
+                border-top:1px solid #f1f5f9; font-family:Consolas,monospace; }
+  ul#codes li.done span.c { text-decoration:line-through; color:var(--ok); }
+  ul#codes li.fail span.c { text-decoration:line-through; color:var(--err); }
+  span.c { flex:1; font-size:15px; font-weight:700; word-break:break-all; }
+  .mini { flex:0 0 auto; min-height:38px; padding:7px 10px; font-size:12.5px; }
+  .mini.ghost { flex:0 0 auto; }
+  footer { position:fixed; left:0; right:0; bottom:0; background:var(--card);
+           border-top:1px solid #e2e8f0; padding:8px 12px calc(8px + env(safe-area-inset-bottom)); }
+  footer .row button { min-height:48px; }
+  #installBtn { display:none; }
+  a.claim { display:block; text-align:center; background:var(--ok); color:#fff;
+            border-radius:9px; padding:12px; font-weight:700; text-decoration:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Coupon Bot — image to codes</h1>
+  <p>pick image &rarr; Gemini via Puter &rarr; claim &rarr; track</p>
+</header>
+<main>
+  <div class="card">
+    <h2>1 &middot; Coupon image</h2>
+    <p class="hint">Single pick — right here. First run may ask for a free Puter
+      sign-in in a popup; it is remembered afterwards. No API key needed.</p>
+    <input type="file" id="file" accept="image/*">
+    <div class="row">
+      <button id="go">Extract codes</button>
+      <button id="signin" class="ghost" style="flex:0 1 auto">Sign in to Puter</button>
+    </div>
+    <div><span id="status">IDLE</span></div>
+    <img id="preview" alt="coupon preview">
+    <pre id="raw">(result appears here)</pre>
+  </div>
+
+  <div class="card">
+    <h2>2 &middot; Codes <span id="count"></span></h2>
+    <div class="stats">
+      <div class="stat s-todo"><b id="nTodo">0</b>TODO</div>
+      <div class="stat s-done"><b id="nDone">0</b>DONE</div>
+      <div class="stat s-fail"><b id="nFail">0</b>FAILED</div>
+    </div>
+    <p class="hint">Tap <b>&#10003;</b> when a coupon claims OK, <b>&#10007;</b> for
+      repeated/invalid ones. Saved on this phone automatically. You can also paste/edit below.</p>
+    <textarea id="box" placeholder="One code per line — or extracted codes land here"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button id="loadBox" class="ghost">Load edited list</button>
+      <button id="copyPending" class="ghost">Copy pending</button>
+    </div>
+    <ul id="codes"></ul>
+  </div>
+
+  <div class="card">
+    <h2>3 &middot; Claim</h2>
+    <p class="hint">Claiming still happens on the promo site. Open it, paste one code
+      at a time. Mark &#10003;/&#10007; here as you go — same Notion as desktop box 3.</p>
+    <a class="claim" href="https://pgretailpromo.woohoo.in/claimreward" target="_blank" rel="noopener">Open claim site</a>
+    <div class="row" style="margin-top:8px">
+      <button id="installBtn" class="ghost">Install app</button>
+      <button id="wipe" class="ghost">Clear all</button>
+    </div>
+  </div>
+</main>
+<footer>
+  <div class="row">
+    <button id="copyNext" class="ok">Copy next pending</button>
+  </div>
+</footer>
+
+<script>
+"use strict";
+// Same model + prompt as desktop extractor.html — keep in sync.
+var GEMINI_MODEL = "google/gemini-3.1-pro-preview";
+var SYSTEM_PROMPT = [
+  "You are a coupon-code extractor for a cashback claim tool.",
+  "Look at the attached image and find every coupon / promo / voucher /",
+  "gift code printed or displayed in it.",
+  "Rules:",
+  '- Output ONLY a JSON array of strings, e.g. ["ABC123XYZ", "HELLO2024"].',
+  "- Uppercase each code exactly as shown; strip spaces and dashes inside codes.",
+  "- Include each code once. Do not invent codes that are not visible.",
+  "- If no codes are visible, output [].",
+  "- No explanations, no markdown, no extra text."
+].join("\n");
+
+var CLAIM_URL = "https://pgretailpromo.woohoo.in/claimreward";
+var LS_KEY = "couponPwaV1";
+var state = { codes: [] }; // [{code, st: 'todo'|'done'|'fail'}]
+
+var $ = function (id) { return document.getElementById(id); };
+var statusEl = $("status"), rawEl = $("raw"), fileEl = $("file"),
+    previewEl = $("preview"), boxEl = $("box"), listEl = $("codes");
+
+function setStatus(s) { statusEl.textContent = s; }
+function toast(m) { setStatus(m); }
+
+// ---------- persistence ----------
+function save() {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {}
+}
+function load() {
+  try {
+    var d = JSON.parse(localStorage.getItem(LS_KEY) || "null");
+    if (d && Array.isArray(d.codes)) state = d;
+  } catch (e) {}
+}
+
+// ---------- parsing (mirrors extract_coupons.parse_codes) ----------
+function parseCodes(text) {
+  text = text || "";
+  var m = text.match(/\[[\s\S]*?\]/);
+  if (m) {
+    try {
+      var arr = JSON.parse(m[0]);
+      var out = arr.map(function (x) {
+        return String(x).replace(/[\s\-]/g, "").toUpperCase();
+      }).filter(Boolean);
+      if (out.length) return Array.from(new Set(out));
+    } catch (e) {}
+  }
+  var toks = (text.toUpperCase().match(/[A-Z0-9]{8,}/g) || []);
+  return Array.from(new Set(toks));
+}
+
+// ---------- list UI ----------
+function setCodes(codes, keepStatus) {
+  var prev = {};
+  if (keepStatus) state.codes.forEach(function (c) { prev[c.code] = c.st; });
+  var seen = {};
+  state.codes = codes.filter(Boolean).map(function (c) {
+    c = String(c).trim().toUpperCase();
+    return c;
+  }).filter(function (c) {
+    if (!c || seen[c]) return false;
+    seen[c] = 1; return true;
+  }).map(function (c) {
+    return { code: c, st: prev[c] || "todo" };
+  });
+  save(); render();
+}
+function render() {
+  var nT = 0, nD = 0, nF = 0;
+  listEl.innerHTML = "";
+  state.codes.forEach(function (c, i) {
+    if (c.st === "done") nD++; else if (c.st === "fail") nF++; else nT++;
+    var li = document.createElement("li");
+    li.className = c.st;
+    var sp = document.createElement("span");
+    sp.className = "c"; sp.textContent = c.code;
+    var bCopy = document.createElement("button");
+    bCopy.className = "mini ghost"; bCopy.textContent = "Copy";
+    bCopy.onclick = function () { copyText(c.code); };
+    var bOk = document.createElement("button");
+    bOk.className = "mini ok"; bOk.textContent = "\u2713";
+    bOk.title = "mark done";
+    bOk.onclick = function () { state.codes[i].st = c.st === "done" ? "todo" : "done"; save(); render(); };
+    var bFail = document.createElement("button");
+    bFail.className = "mini ghost"; bFail.textContent = "\u2717";
+    bFail.title = "mark failed (repeated/invalid)";
+    bFail.onclick = function () { state.codes[i].st = c.st === "fail" ? "todo" : "fail"; save(); render(); };
+    li.appendChild(sp); li.appendChild(bCopy); li.appendChild(bOk); li.appendChild(bFail);
+    listEl.appendChild(li);
+  });
+  $("nTodo").textContent = nT; $("nDone").textContent = nD; $("nFail").textContent = nF;
+  $("count").textContent = state.codes.length ? "(" + state.codes.length + ")" : "";
+  boxEl.value = state.codes.map(function (c) { return c.code; }).join("\n");
+}
+function pending() { return state.codes.filter(function (c) { return c.st === "todo"; }); }
+
+function copyText(t) {
+  function done() { toast("Copied " + t.slice(0, 18)); }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t).then(done, function () { fallback(); });
+  } else fallback();
+  function fallback() {
+    var ta = document.createElement("textarea");
+    ta.value = t; document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); done(); } catch (e) { toast("Copy failed — long-press to copy"); }
+    document.body.removeChild(ta);
+  }
+}
+
+// ---------- extraction via Puter ----------
+fileEl.addEventListener("change", function () {
+  var f = fileEl.files[0];
+  if (f) { previewEl.src = URL.createObjectURL(f); previewEl.style.display = "block"; setStatus("READY"); }
+});
+$("go").onclick = async function () {
+  var f = fileEl.files[0];
+  if (!f) { toast("Pick an image first"); return; }
+  if (typeof puter === "undefined") { toast("Need internet for puter.js"); return; }
+  var btn = $("go"); btn.disabled = true; setStatus("WORKING");
+  try {
+    try {
+      if (puter.auth && !(await puter.auth.isSignedIn())) await puter.auth.signIn();
+    } catch (e) {
+      rawEl.textContent = "Sign-in needed — finish the Puter popup, then press Extract again.";
+      setStatus("AUTH_NEEDED"); return;
+    }
+    var resp = await puter.ai.chat(SYSTEM_PROMPT, f, { model: GEMINI_MODEL });
+    var text = resp && resp.message ? resp.message.content : "";
+    if (Array.isArray(text)) text = text.filter(function (b) { return b && b.type === "text"; }).map(function (b) { return b.text; }).join("\n");
+    text = String(text == null ? "" : text);
+    rawEl.textContent = text;
+    var codes = parseCodes(text);
+    setCodes(codes, true);
+    setStatus(codes.length ? "DONE — " + codes.length + " code(s)" : "DONE — nothing parsed");
+  } catch (e) {
+    var msg = String((e && e.message) || e);
+    rawEl.textContent = "Error: " + msg;
+    setStatus(/auth|sign|login|permission|401|403/i.test(msg) ? "AUTH_NEEDED" : "ERROR");
+  } finally { btn.disabled = false; }
+};
+$("signin").onclick = async function () {
+  if (typeof puter === "undefined") { toast("Need internet for puter.js"); return; }
+  try {
+    await puter.auth.signIn();
+    toast(await puter.auth.isSignedIn() ? "Signed in" : "AUTH_NEEDED");
+  } catch (e) { toast("Finish sign-in in the Puter dialog"); }
+};
+
+// ---------- list actions ----------
+$("loadBox").onclick = function () {
+  var lines = boxEl.value.split(/\r?\n/).map(function (s) { return s.trim().toUpperCase(); }).filter(Boolean);
+  setCodes(lines, true);
+  toast(lines.length + " loaded");
+};
+$("copyPending").onclick = function () {
+  var p = pending().map(function (c) { return c.code; });
+  if (!p.length) { toast("Nothing pending"); return; }
+  copyText(p.join("\n"));
+};
+$("copyNext").onclick = function () {
+  var p = pending();
+  if (!p.length) { toast("Nothing pending"); return; }
+  copyText(p[0].code);
+};
+$("wipe").onclick = function () {
+  if (!state.codes.length || confirm("Clear all codes on this phone?")) {
+    state = { codes: [] }; save(); render(); rawEl.textContent = "(result appears here)"; toast("IDLE");
+  }
+};
+
+// ---------- installability ----------
+var deferredPrompt = null;
+window.addEventListener("beforeinstallprompt", function (e) {
+  e.preventDefault(); deferredPrompt = e;
+  $("installBtn").style.display = "block";
+});
+$("installBtn").onclick = async function () {
+  if (!deferredPrompt) { toast("Use browser menu → Add to Home screen"); return; }
+  deferredPrompt.prompt();
+  try { await deferredPrompt.userChoice; } catch (e) {}
+  deferredPrompt = null; $("installBtn").style.display = "none";
+};
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", function () {
+    navigator.serviceWorker.register("./sw.js").catch(function () {});
+  });
+}
+
+load(); render();
+</script>
+</body>
+</html>
