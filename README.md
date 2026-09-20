@@ -74,6 +74,13 @@ Option A — deploy this folder as the project root:
      per run, and releases the session when the batch ends. Without it
      Vercel tries to launch Chromium in-function (needs `@sparticuz/chromium`
      and still hits timeouts).
+   - `STEEL_USE_PROXY=true` (**needed if the claim site 403s the cloud
+     browser**) — routes the Steel session through Steel's residential
+     network. Requires **$10+ paid Steel balance** (free credits don't cover
+     proxies/CAPTCHA). Without it, Steel's datacenter IP gets `403
+     Forbidden` from the promo site while the desktop app works fine from a
+     home (residential) IP. The run detects a block page and says so in the
+     log instead of failing every coupon silently.
 3. `vercel --prod`. Open the URL in Android Chrome → ⋮ → Add to Home screen.
 
 > **Honest Vercel limit (you chose Vercel-only):** Hobby functions cap at

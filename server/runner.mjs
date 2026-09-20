@@ -11,6 +11,17 @@ const sleep = (a = 0.5, b = 1.0) =>
   new Promise((r) => setTimeout(r, (a + Math.random() * (b - a)) * 1000));
 const rnd = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 
+// Last native-dialog text seen on the active page (dialogs auto-dismiss).
+let lastDialogText = "";
+function attachDialogCapture(page) {
+  try {
+    page.on("dialog", (d) => {
+      try { lastDialogText = d.message() || ""; } catch { lastDialogText = ""; }
+      d.dismiss().catch(() => {});
+    });
+  } catch { /* non-fatal */ }
+}
+
 async function launchBrowser(resumeSteelId = "") {
   // Priority: Steel (STEEL_API_KEY) > generic CDP (BROWSER_WS_URL) > local
   // Chrome. Steel runs the browser in its cloud, so Vercel serverless never
@@ -24,11 +35,14 @@ async function launchBrowser(resumeSteelId = "") {
     let steelId = resumeSteelId || null, viewerUrl = "";
     if (!steelId) {
       try {
+        const useProxy = process.env.STEEL_USE_PROXY === "true";
         const r = await fetch("https://api.steel.dev/v1/sessions", {
           method: "POST",
           headers: { "steel-api-key": steelKey, "Content-Type": "application/json" },
           // 30 min timeout: covers a full batch of OTP waits.
-          body: JSON.stringify({ timeout: 1800000 }),
+          // useProxy (needs $10+ paid Steel balance) routes through Steel's
+          // residential network — required if the claim site 403s datacenters.
+          body: JSON.stringify({ timeout: 1800000, ...(useProxy ? { useProxy: true } : {}) }),
         });
         const j = await r.json().catch(() => ({}));
         steelId = j.id || j.sessionId || null;
@@ -123,12 +137,16 @@ async function otpVisible(page) {
 }
 
 async function visibleError(page) {
+  // Native alert parity with desktop: Playwright auto-dismisses dialogs, so
+  // capture the text via listener (attached in startRun) instead of reading
+  // a blocking alert like Selenium does.
+  if (lastDialogText && ERROR_RE.test(lastDialogText)) {
+    const t = lastDialogText;
+    lastDialogText = "";
+    return t.split(/\s+/).join(" ").slice(0, 300);
+  }
+  lastDialogText = "";
   try {
-    const alerted = await page.evaluate(() => {
-      // native alert can't be read headless-reliably; skip — modal scan below covers it
-      return null;
-    }).catch(() => null);
-    void alerted;
     const data = await page.evaluate(new Function(`return (${MODAL_JS})()`)).catch(() => null);
     if (!data) return null;
     for (const t of data.modals || []) if (t && ERROR_RE.test(t)) return t.split(/\s+/).join(" ").slice(0, 300);
@@ -199,22 +217,31 @@ async function processOne(page, s, coupon) {
   const cfg = s.config;
   const say = (m) => pushLog(s, m);
   say(`Processing coupon ${coupon}`);
-  if (!(await safeType(page, "phone", cfg.phone))) return "fail";
-  await sleep(0.4, 0.7);
-  if (!(await safeType(page, "coupon", coupon))) return "fail";
-  await sleep(0.4, 0.7);
-  try {
-    const sel = page.locator(`xpath=${LOCATORS.state}`).first();
-    await sel.waitFor({ state: "visible", timeout: 15000 });
-    await sel.selectOption({ label: cfg.state }).catch(() => {});
+  await saveSession(s); // persist immediately — early fails must stay logged
+  let pre = null;
+  if (!(await safeType(page, "phone", cfg.phone))) pre = "fail";
+  else {
     await sleep(0.4, 0.7);
-  } catch { return "fail"; }
-  try {
-    const box = page.locator(`xpath=${LOCATORS.terms}`).first();
-    await box.waitFor({ timeout: 15000 });
-    if (!(await box.isChecked().catch(() => true))) await box.check().catch(() => box.evaluate((n) => n.click()));
-  } catch { return "fail"; }
-  if (!(await safeClick(page, "submit"))) return "fail";
+    if (!(await safeType(page, "coupon", coupon))) pre = "fail";
+    else {
+      await sleep(0.4, 0.7);
+      try {
+        const sel = page.locator(`xpath=${LOCATORS.state}`).first();
+        await sel.waitFor({ state: "visible", timeout: 15000 });
+        await sel.selectOption({ label: cfg.state }).catch(() => {});
+        await sleep(0.4, 0.7);
+      } catch { pre = "fail"; }
+      if (pre !== "fail") {
+        try {
+          const box = page.locator(`xpath=${LOCATORS.terms}`).first();
+          await box.waitFor({ timeout: 15000 });
+          if (!(await box.isChecked().catch(() => true))) await box.check().catch(() => box.evaluate((n) => n.click()));
+        } catch { pre = "fail"; }
+        if (pre !== "fail" && !(await safeClick(page, "submit"))) pre = "fail";
+      }
+    }
+  }
+  if (pre === "fail") { say(`Form fill failed for ${coupon} — marking failed`); await saveSession(s); return "fail"; }
 
   // Post-submit: OTP visible vs server rejection (mirrors wait_post_submit).
   const end = Date.now() + 12000;
@@ -230,48 +257,86 @@ async function processOne(page, s, coupon) {
     return "fail";
   }
 
-  // OTP gate: screenshot + pause for the PWA popup.
-  let shot = "";
-  try {
-    const buf = await page.screenshot({ timeout: 8000 }).catch(() => null);
-    if (buf) shot = "data:image/png;base64," + buf.toString("base64");
-  } catch { /* optional */ }
-  s.current = { coupon, deadline: Date.now() + cfg.gateTimeout * 1000, screenshot: shot, otpAction: "", otpCode: "" };
-  s.status = "awaiting_otp";
-  await saveSession(s);
-  say(`OTP required for ${coupon} — waiting in PWA popup…`);
+  // OTP gate: screenshot + pause for the PWA popup. Shared by the fresh
+  // submit path and the resume path (a new instance re-attaching to the same
+  // Steel browser must NOT refill the form — just re-wait the open gate).
+  return awaitOtpGateAndContinue(page, s, coupon, cfg.gateTimeout, true);
+}
+
+async function awaitOtpGateAndContinue(page, s, coupon, waitSec, freshGate) {
+  const cfg = s.config;
+  const say = (m) => pushLog(s, m);
+  if (freshGate) {
+    let shot = "";
+    try {
+      const buf = await page.screenshot({ timeout: 8000 }).catch(() => null);
+      if (buf) shot = "data:image/png;base64," + buf.toString("base64");
+    } catch { /* optional */ }
+    s.current = { coupon, deadline: Date.now() + cfg.gateTimeout * 1000, screenshot: shot, otpAction: "", otpCode: "" };
+    s.status = "awaiting_otp";
+    await saveSession(s);
+    say(`OTP required for ${coupon} — waiting in PWA popup…`);
+  } else {
+    // Resume: same browser, same OTP page. Fresh screenshot + full wait again
+    // so the user's popup countdown continues instead of instant-skipping.
+    let shot = (s.current && s.current.screenshot) || "";
+    try {
+      const buf = await page.screenshot({ timeout: 8000 }).catch(() => null);
+      if (buf) shot = "data:image/png;base64," + buf.toString("base64");
+    } catch { /* keep old shot */ }
+    s.current.screenshot = shot;
+    s.current.otpAction = "";
+    s.current.otpCode = "";
+    s.current.deadline = Date.now() + cfg.gateTimeout * 1000;
+    s.status = "awaiting_otp";
+    await saveSession(s);
+    say(`Re-attached to OTP gate for ${coupon} — waiting in PWA popup…`);
+  }
 
   const { action, code } = await waitOtpGate(s.id, coupon, cfg.gateTimeout);
   s = (await getSession(s.id)) || s;
-  if (action === "quit" || s.status === "stopped") return "quit";
-  if (action === "skip") { say(`Skipped ${coupon}`); return "skip"; }
+  // NOTE: s was re-fetched — every return path below saves before returning,
+  // otherwise these step logs never reach the PWA (stateless store).
+  let outcome;
+  if (action === "quit" || s.status === "stopped") outcome = "quit";
+  else if (action === "skip") { say(`Skipped ${coupon}`); outcome = "skip"; }
+  else {
+    if (code) {
+      const ok = await fillOtp(page, code);
+      say(ok ? `OTP auto-fill succeeded for ${coupon}` : `OTP auto-fill did not stick for ${coupon} — continuing anyway`);
+      await sleep(1.0, 1.8);
+    } else {
+      say(`No OTP code entered for ${coupon} — continuing (solve in page if visible)`);
+      await sleep(1.0, 1.8);
+    }
+    s.current = null;
+    s.status = "running";
+    await saveSession(s);
 
-  if (code) {
-    const ok = await fillOtp(page, code);
-    say(ok ? `OTP auto-fill succeeded for ${coupon}` : `OTP auto-fill did not stick for ${coupon} — continuing anyway`);
-    await sleep(1.0, 1.8);
-  } else {
-    say(`No OTP code entered for ${coupon} — continuing (solve in page if visible)`);
-    await sleep(1.0, 1.8);
+    if (!(await safeClick(page, "otp_next"))) outcome = "fail";
+    else {
+      await sleep(0.8, 1.2);
+      if (!(await safeClick(page, "upi_option"))) outcome = "fail";
+      else {
+        await sleep(0.4, 0.7);
+        if (!(await safeType(page, "upi_id", cfg.upi))) outcome = "fail";
+        else {
+          await sleep(0.4, 0.7);
+          try {
+            const box = page.locator(`xpath=${LOCATORS.upi_terms}`).first();
+            await box.waitFor({ timeout: 15000 });
+            if (!(await box.isChecked().catch(() => true))) await box.check().catch(() => box.evaluate((n) => n.click()));
+          } catch { outcome = "fail"; }
+          if (outcome !== "fail") {
+            if (!(await safeClick(page, "final_submit"))) outcome = "fail";
+            else { await sleep(0.5, 1.0); outcome = "done"; }
+          }
+        }
+      }
+    }
   }
-  s.current = null;
-  s.status = "running";
   await saveSession(s);
-
-  if (!(await safeClick(page, "otp_next"))) return "fail";
-  await sleep(0.8, 1.2);
-  if (!(await safeClick(page, "upi_option"))) return "fail";
-  await sleep(0.4, 0.7);
-  if (!(await safeType(page, "upi_id", cfg.upi))) return "fail";
-  await sleep(0.4, 0.7);
-  try {
-    const box = page.locator(`xpath=${LOCATORS.upi_terms}`).first();
-    await box.waitFor({ timeout: 15000 });
-    if (!(await box.isChecked().catch(() => true))) await box.check().catch(() => box.evaluate((n) => n.click()));
-  } catch { return "fail"; }
-  if (!(await safeClick(page, "final_submit"))) return "fail";
-  await sleep(0.5, 1.0);
-  return "done";
+  return outcome;
 }
 
 const liveRuns = new Set();
@@ -296,9 +361,13 @@ export async function startRun(sessionId) {
     pushLog(s, `Starting: phone=${s.config.phone} upi=${s.config.upi} state=${s.config.state} (${s.todo.length} coupons)`);
     await saveSession(s);
 
-    const h = await launchBrowser(s.steelSessionId || "");
+    const resumeId = s.steelSessionId || "";
+    const h = await launchBrowser(resumeId);
     browser = h.browser;
     steelId = h.steelId;
+    // sameBrowser = re-attached to the live OTP page (safe to re-wait gate).
+    // Fresh browser = stale gates are dead; restart the coupon from the form.
+    const sameBrowser = Boolean(resumeId && steelId && steelId === resumeId);
     if (steelId && steelId !== s.steelSessionId) s.steelSessionId = steelId;
     if (h.viewerUrl) s.viewerUrl = h.viewerUrl;
     if (s.viewerUrl) pushLog(s, `Steel live view: ${s.viewerUrl}`);
@@ -318,8 +387,18 @@ export async function startRun(sessionId) {
       });
       page = await ctx.newPage();
     }
+    attachDialogCapture(page);
     await page.goto(CLAIM_URL, { waitUntil: "domcontentloaded", timeout: 45000 }).catch(() => {});
     await page.locator(`xpath=${LOCATORS.phone}`).first().waitFor({ timeout: 40000 }).catch(() => {});
+    // 403 from a cloud IP is fatal for the whole run — say so immediately
+    // (desktop never sees this; it runs on a residential IP).
+    try {
+      const title = await page.title().catch(() => "");
+      if (/forbidden|access denied|blocked/i.test(title || "")) {
+        pushLog(s, "Claim site refused the cloud browser (403/block page). It likely allows only residential IPs: enable Steel proxies (STEEL_USE_PROXY=true needs $10+ paid balance) or run the backend where the desktop app runs.");
+        await saveSession(s);
+      }
+    } catch { /* non-fatal */ }
     let batch = 0;
 
     while (true) {
@@ -333,8 +412,26 @@ export async function startRun(sessionId) {
       const coupon = s.todo[0];
       let outcome = "fail";
       try {
-        try { await page.locator(`xpath=${LOCATORS.phone}`).first().waitFor({ timeout: 40000 }); } catch {}
-        outcome = await processOne(page, s, coupon);
+        if (s.current && s.current.coupon === coupon && s.status === "awaiting_otp" && sameBrowser) {
+          // Resumed onto the live OTP page: do NOT refill the form — the
+          // previous instance already submitted it. Just re-wait the gate.
+          outcome = await awaitOtpGateAndContinue(page, s, coupon, s.config.gateTimeout, false);
+        } else {
+          if (s.current) {
+            // Stale gate from a dead browser — drop it and restart the coupon.
+            s.current = null;
+            s.status = "running";
+            pushLog(s, `Dropped stale OTP gate for ${coupon} (fresh browser) — restarting it`);
+            await saveSession(s);
+          }
+          // Fresh-form guarantee: a resumed instance may hold any page.
+          // (Cookie clear mirrors desktop reset_session; never on the OTP
+          // branch above — that would kill the live OTP session.)
+          try { await ctx.clearCookies().catch(() => {}); } catch {}
+          await page.goto(CLAIM_URL, { waitUntil: "domcontentloaded", timeout: 45000 }).catch(() => {});
+          try { await page.locator(`xpath=${LOCATORS.phone}`).first().waitFor({ timeout: 40000 }); } catch {}
+          outcome = await processOne(page, s, coupon);
+        }
         s = (await getSession(sessionId)) || s;
       } catch (e) {
         pushLog(s, `Coupon ${coupon} crashed: ${String(e && e.message || e).slice(0, 200)}`);
@@ -351,12 +448,6 @@ export async function startRun(sessionId) {
       else { s.failed.push(coupon); pushLog(s, `Failed ${coupon} (remaining: ${s.todo.length})`); }
       if (s.status !== "stopped") s.status = "running";
       await saveSession(s);
-      if (s.todo.length && s.status !== "stopped") {
-        try {
-          await ctx.clearCookies().catch(() => {});
-          await page.goto(CLAIM_URL, { waitUntil: "domcontentloaded", timeout: 45000 }).catch(() => {});
-        } catch {}
-      }
     }
 
     s = (await getSession(sessionId)) || s;

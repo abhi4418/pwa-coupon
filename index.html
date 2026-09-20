@@ -408,13 +408,15 @@ async function startRun(coupons, tag) {
   if (!validPhone(c.phone)) { alert("Invalid phone: 10 digits starting 6-9."); return; }
   if (!validUpi(c.upi)) { alert("Invalid UPI ID: name@bank."); return; }
   if (!backendOk) { alert("Backend not reachable. Deploy the backend (Vercel) or run `npm run bot-server` — meanwhile use Copy next + claim manually."); return; }
+  // Disable FIRST: a double-tap during the request used to create two
+  // sessions (two Steel browsers, double spend). Re-enabled on failure/finish.
+  $("startBtn").disabled = true; $("retryBtn").disabled = true; $("stopBtn").disabled = false;
   try {
     setStatus("Starting " + tag + " batch — " + coupons.length + " coupon(s)");
     var r = await api("./api/run-start", { method: "POST", body: JSON.stringify(Object.assign({}, c, { coupons: coupons, tag: tag })) });
     sessionId = r.sessionId; lastLogCount = 0; unknownSessionStrikes = 0;
-    $("startBtn").disabled = true; $("retryBtn").disabled = true; $("stopBtn").disabled = false;
     pollLoop();
-  } catch (e) { setStatus("Start failed: " + e.message); alert("Start failed: " + e.message); }
+  } catch (e) { $("startBtn").disabled = false; $("retryBtn").disabled = false; $("stopBtn").disabled = true; setStatus("Start failed: " + e.message); alert("Start failed: " + e.message); }
 }
 
 async function pollLoop() {
